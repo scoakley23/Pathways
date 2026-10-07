@@ -36,12 +36,13 @@ jobs:
 
       # USCIS blocks plain scripted requests from cloud servers, so fetch
       # through headless Chrome (see scripts/fetch-processing-times.mjs).
-      - name: Install headless Chrome
-        run: |
-          npm install --no-save playwright@1
-          npx playwright install --with-deps chromium
+      # Uses the Google Chrome preinstalled on GitHub's runners.
+      - name: Install Playwright
+        timeout-minutes: 5
+        run: npm install --no-save playwright@1
 
       - name: Fetch latest USCIS processing times
+        timeout-minutes: 40
         run: node scripts/fetch-processing-times.mjs --browser --raw-dir raw-responses
 
       # Every USCIS response this run used, kept for 90 days so any number on

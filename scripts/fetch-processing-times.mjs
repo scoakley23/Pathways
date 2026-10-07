@@ -71,9 +71,20 @@ async function openBrowser() {
   } catch {
     throw new Error('browser mode needs Playwright: npm install --no-save playwright && npx playwright install chromium');
   }
-  // The "chromium" channel runs Chrome's full headless mode, which behaves
-  // like a normal browser.
-  browser = await playwright.chromium.launch({ channel: 'chromium' });
+  // Prefer an installed Google Chrome (preinstalled on GitHub's runners), then
+  // Playwright's own Chromium. Both run Chrome's full headless mode, which
+  // behaves like a normal browser.
+  const channels = process.env.USCIS_BROWSER_CHANNEL ? [process.env.USCIS_BROWSER_CHANNEL] : ['chrome', 'chromium'];
+  for (const channel of channels) {
+    try {
+      browser = await playwright.chromium.launch({ channel });
+      console.log(`Using browser channel "${channel}" (${browser.version()})`);
+      break;
+    } catch (err) {
+      console.warn(`Couldn't launch browser channel "${channel}": ${err.message.split('\n')[0]}`);
+    }
+  }
+  if (!browser) throw new Error('no usable browser; run: npx playwright install chromium');
   const probe = await browser.newPage();
   const userAgent = (await probe.evaluate(() => navigator.userAgent)).replace('HeadlessChrome', 'Chrome');
   await probe.close();
