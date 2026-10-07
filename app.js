@@ -6,6 +6,10 @@ const COLORS = ['--q1', '--q2', '--q3', '--q4', '--q5'].map((v) =>
 );
 const NONE_COLOR = getComputedStyle(document.documentElement).getPropertyValue('--none').trim();
 const DARK = window.matchMedia('(prefers-color-scheme: dark)').matches;
+const USCIS_URL = 'https://egov.uscis.gov/processing-times/';
+// Sample (made-up) data is only ever loaded when the URL has ?sample.
+const SAMPLE_MODE = new URLSearchParams(location.search).has('sample');
+const STALE_AFTER_DAYS = 60;
 const TYPE_LABELS = { field: 'Field office', service: 'Service center', asylum: 'Asylum office', other: 'Office' };
 
 const $ = (id) => document.getElementById(id);
@@ -18,7 +22,7 @@ const els = {
   summary: $('summary'),
   detail: $('detail'),
   legend: $('legend'),
-  banner: $('sample-banner'),
+  banner: $('banner'),
   updated: $('updated'),
   unmapped: $('unmapped-note'),
 };
@@ -33,6 +37,9 @@ const markers = new Map();
 
 const escapeHtml = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+const fmtDate = (iso) =>
+  new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 const fmtMonths = (m) => (m == null ? '—' : `${m < 10 ? m.toFixed(1).replace(/\.0$/, '') : Math.round(m)} mo`);
 
@@ -225,10 +232,11 @@ function renderDetail() {
         .map(
           (t) => `<tr class="${t.form === state.form && t.subtype === state.subtype ? 'current' : ''}">
             <td><a href="#" data-form="${escapeHtml(t.form)}" data-subtype="${escapeHtml(t.subtype)}">${escapeHtml(t.form)}</a><br><span class="muted">${escapeHtml(describe(t))}</span></td>
-            <td title="${escapeHtml(t.display ?? '')}">${fmtMonths(t.months)}</td></tr>`
+            <td>${fmtMonths(t.months)}${t.display ? `<br><span class="muted small">USCIS: ${escapeHtml(t.display)}</span>` : ''}</td></tr>`
         )
         .join('')}
-    </tbody></table>`;
+    </tbody></table>
+    <p class="small"><a href="${USCIS_URL}" target="_blank" rel="noopener">Check these numbers on USCIS ↗</a></p>`;
 }
 
 function render() {
@@ -328,21 +336,49 @@ function initMap() {
   });
 }
 
+async function loadData() {
+  const file = SAMPLE_MODE ? 'data/sample-processing-times.json' : 'data/processing-times.json';
+  const res = await fetch(file, { cache: 'no-cache' });
+  if (res.status === 404 && !SAMPLE_MODE) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status} loading ${file}`);
+  return res.json();
+}
+
+function showBanner(html) {
+  els.banner.innerHTML = html;
+  els.banner.hidden = false;
+}
+
 async function main() {
   try {
-    const res = await fetch('data/processing-times.json', { cache: 'no-cache' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    data = await res.json();
+    data = await loadData();
   } catch (err) {
     els.summary.innerHTML = `<h2>Couldn't load data</h2><p class="muted">${escapeHtml(err.message)}. If you opened this file directly, serve the folder instead (for example <code>npm start</code>).</p>`;
     return;
   }
 
-  els.banner.hidden = !data.sample;
-  const updated = new Date(data.generatedAt);
-  els.updated.textContent = `Data updated ${updated.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
-
   initMap();
+  if (!data) {
+    // Never fall back to made-up numbers: show nothing until real data exists.
+    for (const el of [els.form, els.subtype, els.type, els.search]) el.disabled = true;
+    els.legend.hidden = true;
+    els.summary.innerHTML = `<h2>No USCIS data yet</h2>
+      <p class="muted">Processing times appear here after the first successful run of the
+      “Update processing times” workflow. Until then, see <a href="${USCIS_URL}" target="_blank" rel="noopener">USCIS</a>
+      or preview the layout with <a href="?sample">sample data</a>.</p>`;
+    return;
+  }
+
+  if (data.sample) {
+    showBanner('<strong>Sample data:</strong> these numbers are made up for testing and are not from USCIS. <a href="./">View live data</a>');
+  } else if (data.publishedAt && (Date.now() - Date.parse(data.publishedAt)) / 864e5 > STALE_AFTER_DAYS) {
+    showBanner(`These times were published by USCIS on ${fmtDate(data.publishedAt)} and may be out of date. <a href="${USCIS_URL}" target="_blank" rel="noopener">Check current times on USCIS ↗</a>`);
+  }
+  els.updated.textContent = [
+    data.publishedAt && `USCIS published ${fmtDate(data.publishedAt)}`,
+    `checked ${fmtDate(data.generatedAt)}`,
+  ].filter(Boolean).join(' · ') + ' · ';
+
   applyHash(readHash());
   bindEvents();
   render();

@@ -1,0 +1,22 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+      - name: Validate published data
+        run: |
+          if [ -f data/processing-times.json ]; then
+            node scripts/validate-data.mjs data/processing-times.json --max-age-days 365
+          else
+            echo "No live data committed yet."
+          fi

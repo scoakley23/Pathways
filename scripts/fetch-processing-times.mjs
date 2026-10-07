@@ -5,16 +5,21 @@
 // call it directly, so this script runs on a schedule (see .github/workflows).
 //
 // Usage:
-//   node scripts/fetch-processing-times.mjs            # fetch live data
-//   node scripts/fetch-processing-times.mjs --sample   # write clearly-labelled fake data
+//   node scripts/fetch-processing-times.mjs                  # fetch live data
+//   node scripts/fetch-processing-times.mjs --raw-dir raw    # also save every API response
 //   node scripts/fetch-processing-times.mjs --forms I-485,N-400   # only some forms
+//   node scripts/fetch-processing-times.mjs --sample         # fake data, written to a separate file
+//   node scripts/fetch-processing-times.mjs --out file.json  # write somewhere else
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { ParseError, buildOfficeMatcher, findArray, normalize, parseProcessingTime } from './lib/uscis.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT_FILE = path.join(ROOT, 'data', 'processing-times.json');
+const LIVE_FILE = path.join(ROOT, 'data', 'processing-times.json');
+// Sample data never goes in the live file; the site only loads it with ?sample.
+const SAMPLE_FILE = path.join(ROOT, 'data', 'sample-processing-times.json');
 const OFFICES_FILE = path.join(ROOT, 'data', 'offices.json');
 
 const API = 'https://egov.uscis.gov/processing-times/api';
@@ -26,47 +31,19 @@ const HEADERS = {
 };
 const CONCURRENCY = 4;
 const RETRIES = 3;
+// Abort without writing if more than this share of office lookups fail.
+const MAX_FAILURE_RATE = 0.1;
 
 const args = process.argv.slice(2);
+const argValue = (name) => {
+  const a = args.find((x) => x === name || x.startsWith(`${name}=`));
+  if (!a) return null;
+  return a.includes('=') ? a.split('=').slice(1).join('=') : args[args.indexOf(a) + 1];
+};
 const SAMPLE = args.includes('--sample');
-const formsArg = args.find((a) => a.startsWith('--forms'));
-const ONLY_FORMS = formsArg
-  ? (formsArg.includes('=') ? formsArg.split('=')[1] : args[args.indexOf(formsArg) + 1])
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-  : null;
-
-// ---------- office matching ----------
-
-const normalize = (s) =>
-  String(s ?? '')
-    .toLowerCase()
-    .replace(/\bsaint\b/g, 'st')
-    .replace(/\bmount\b/g, 'mt')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-
-async function loadOfficeIndex() {
-  const offices = JSON.parse(await readFile(OFFICES_FILE, 'utf8'));
-  const index = new Map();
-  for (const o of offices) {
-    for (const key of [o.name, ...(o.aliases ?? [])]) index.set(normalize(key), o);
-  }
-  return {
-    offices,
-    match(code, description) {
-      const candidates = [description, code, String(description ?? '').replace(/\s*\(.*\)\s*$/, '')];
-      for (const c of candidates) {
-        const hit = index.get(normalize(c));
-        if (hit) return hit;
-      }
-      // Fall back to "City ST" prefix matching, e.g. "Boston MA Field Office".
-      const n = normalize(description);
-      for (const [key, o] of index) if (key.length > 4 && n.startsWith(key)) return o;
-      return null;
-    },
-  };
-}
+const RAW_DIR = argValue('--raw-dir') && path.resolve(argValue('--raw-dir'));
+const ONLY_FORMS = argValue('--forms')?.split(',').map((s) => s.trim().toUpperCase()) ?? null;
+const OUT_FILE = argValue('--out') ? path.resolve(argValue('--out')) : SAMPLE ? SAMPLE_FILE : LIVE_FILE;
 
 // ---------- HTTP ----------
 
@@ -80,9 +57,20 @@ async function getJson(urlPath) {
       const res = await fetch(url, { headers: HEADERS });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-      return await res.json();
+      const text = await res.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new ParseError(`non-JSON response from ${url} (blocked or changed?): ${text.slice(0, 120)}`);
+      }
+      if (RAW_DIR) {
+        await writeFile(path.join(RAW_DIR, `${urlPath.replace(/[^A-Za-z0-9-]+/g, '__')}.json`), text);
+      }
+      return json;
     } catch (err) {
       lastErr = err;
+      if (err instanceof ParseError) break;
       await sleep(500 * 2 ** attempt);
     }
   }
@@ -102,106 +90,45 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
-// The USCIS payloads nest their arrays a few levels deep and have changed
-// shape over time, so find the first array whose objects carry a given key.
-function findArray(obj, key) {
-  if (!obj || typeof obj !== 'object') return null;
-  if (Array.isArray(obj)) {
-    if (obj.some((x) => x && typeof x === 'object' && key in x)) return obj;
-    for (const x of obj) {
-      const r = findArray(x, key);
-      if (r) return r;
-    }
-    return null;
-  }
-  for (const v of Object.values(obj)) {
-    const r = findArray(v, key);
-    if (r) return r;
-  }
-  return null;
-}
-
-// ---------- parsing ----------
-
-const UNIT_TO_MONTHS = { month: 1, week: 12 / 52, day: 12 / 365, year: 12 };
-
-function toMonths(value, unit) {
-  const v = Number(value);
-  if (!Number.isFinite(v)) return null;
-  const u = String(unit ?? 'months').toLowerCase().replace(/s$/, '');
-  return v * (UNIT_TO_MONTHS[u] ?? 1);
-}
-
-function parseRange(range) {
-  if (!Array.isArray(range) || !range.length) return null;
-  const parts = range
-    .map((r) => ({ value: Number(r.value), unit: r.unit ?? r.unit_en ?? 'Months', months: toMonths(r.value, r.unit ?? r.unit_en) }))
-    .filter((r) => r.months != null && r.months > 0);
-  if (!parts.length) return null;
-  parts.sort((a, b) => a.months - b.months);
-  const hi = parts[parts.length - 1];
-  const lo = parts[0];
-  return {
-    months: round(hi.months),
-    lowMonths: lo !== hi ? round(lo.months) : null,
-    display: lo !== hi ? `${fmt(lo)} – ${fmt(hi)}` : fmt(hi),
-  };
-}
-
-const round = (n) => Math.round(n * 10) / 10;
-const fmt = (p) => `${p.value} ${p.unit.toLowerCase()}`;
-
-function parseProcessingTime(payload, requestedSubtype) {
-  const pt = payload?.data?.processing_time ?? payload?.processing_time ?? payload;
-  const out = [];
-  const subtypes = findArray(pt, 'range');
-  const entries = subtypes ?? (pt?.range ? [pt] : []);
-  for (const s of entries) {
-    const range = parseRange(s.range);
-    if (!range) continue;
-    out.push({
-      subtype: s.form_type ?? s.subtype ?? requestedSubtype ?? null,
-      ...range,
-      publicationDate: s.publication_date ?? pt?.publication_date ?? null,
-      receiptDate: s.service_request_date ?? s.service_request_date_en ?? null,
-    });
-  }
-  return out;
-}
-
 // ---------- live fetch ----------
 
-async function fetchLive(officeIndex) {
+async function fetchLive(matchOffice) {
   const formsPayload = await getJson('forms');
-  const formList = findArray(formsPayload, 'form_name') ?? [];
-  if (!formList.length) throw new Error('No forms returned from USCIS API — has its shape changed?');
+  const formList = findArray(formsPayload, 'form_name', ['data', 'forms', 'forms']) ?? [];
+  if (!formList.length) throw new ParseError('no forms returned from the USCIS API; has its format changed?');
 
   const forms = [];
   const offices = {};
   const times = [];
   const unmatched = new Set();
+  const failures = [];
+  let lookups = 0;
 
   const selected = formList.filter((f) => !ONLY_FORMS || ONLY_FORMS.includes(String(f.form_name).toUpperCase()));
+  if (ONLY_FORMS && selected.length !== ONLY_FORMS.length) {
+    const found = new Set(selected.map((f) => String(f.form_name).toUpperCase()));
+    console.warn(`Not offered by USCIS: ${ONLY_FORMS.filter((f) => !found.has(f)).join(', ')}`);
+  }
+
   for (const f of selected) {
     const formName = f.form_name;
     const typesPayload = await getJson(`formtypes/${formName}`);
-    const subtypeList = findArray(typesPayload, 'form_type') ?? [];
+    const subtypeList = findArray(typesPayload, 'form_type', ['data', 'form_types', 'subtypes']) ?? [];
     const subtypes = subtypeList.map((s) => ({
       code: s.form_type,
       description: s.form_type_description_en ?? s.form_type_description ?? s.form_type,
     }));
     forms.push({ form: formName, description: f.form_description_en ?? f.form_description ?? '', subtypes });
 
-    // Collect the offices for every subtype, then ask each one for its times.
     const jobs = [];
     for (const st of subtypes) {
       const officesPayload = await getJson(`formoffices/${formName}/${st.code}`);
-      const officeList = findArray(officesPayload, 'office_code') ?? [];
+      const officeList = findArray(officesPayload, 'office_code', ['data', 'form_offices', 'offices']) ?? [];
       for (const o of officeList) {
         const code = o.office_code;
         if (!offices[code]) {
-          const geo = officeIndex.match(code, o.office_description);
-          if (!geo) unmatched.add(`${code} — ${o.office_description}`);
+          const geo = matchOffice(code, o.office_description);
+          if (!geo) unmatched.add(`${code}: ${o.office_description}`);
           offices[code] = {
             name: o.office_description ?? code,
             type: geo?.type ?? 'other',
@@ -215,34 +142,48 @@ async function fetchLive(officeIndex) {
       }
     }
 
+    lookups += jobs.length;
     const results = await mapLimit(jobs, CONCURRENCY, async (job) => {
+      const where = `${formName}/${job.office}/${job.subtype}`;
       try {
         const payload = await getJson(`processingtime/${formName}/${job.office}/${job.subtype}`);
-        return parseProcessingTime(payload, job.subtype)
-          .filter((t) => !t.subtype || t.subtype === job.subtype)
-          .map((t) => ({ ...t, subtype: job.subtype, office: job.office }));
+        if (!payload) throw new Error('404 Not Found');
+        const entries = parseProcessingTime(payload);
+        // Only keep the entry for the category we asked about; never guess.
+        let entry = entries.find((e) => e.subtype === job.subtype);
+        if (!entry && entries.length === 1 && entries[0].subtype == null) entry = entries[0];
+        if (!entry) throw new ParseError(`response doesn't include category ${job.subtype}`);
+        return { form: formName, ...entry, subtype: job.subtype, office: job.office };
       } catch (err) {
-        console.warn(`  ! ${formName}/${job.office}/${job.subtype}: ${err.message}`);
-        return [];
+        failures.push(`${where}: ${err.message}`);
+        return null;
       }
     });
-    const before = times.length;
-    for (const r of results) for (const t of r) times.push({ form: formName, ...t });
-    console.log(`${formName}: ${subtypes.length} categories, ${jobs.length} office lookups, ${times.length - before} times`);
+    const ok = results.filter(Boolean);
+    times.push(...ok);
+    console.log(`${formName}: ${subtypes.length} categories, ${jobs.length} office lookups, ${ok.length} times`);
   }
 
   if (unmatched.size) {
     console.warn(`\n${unmatched.size} office(s) have no coordinates; add them to data/offices.json to map them:`);
     for (const u of unmatched) console.warn(`  ${u}`);
   }
+  if (failures.length) {
+    console.warn(`\n${failures.length} of ${lookups} lookups failed:`);
+    for (const f of failures.slice(0, 50)) console.warn(`  ${f}`);
+    if (failures.length > 50) console.warn(`  … and ${failures.length - 50} more`);
+  }
+  if (lookups && failures.length / lookups > MAX_FAILURE_RATE) {
+    throw new Error(`${Math.round((failures.length / lookups) * 100)}% of lookups failed (limit ${MAX_FAILURE_RATE * 100}%)`);
+  }
   return { forms, offices, times };
 }
 
 // ---------- sample data ----------
 
-// Deterministic fake data so the site can be developed without network access.
-// The output is flagged `sample: true` and the UI shows a banner for it.
-function buildSample(officeIndex) {
+// Deterministic fake data for working on the site offline. Written only to
+// data/sample-processing-times.json and flagged `sample: true`.
+function buildSample(officeList) {
   const forms = [
     { form: 'I-485', description: 'Application to Register Permanent Residence or Adjust Status', subtypes: [
       { code: 'FB', description: 'Family-based adjustment applications' },
@@ -267,10 +208,11 @@ function buildSample(officeIndex) {
 
   let seed = 42;
   const rand = () => ((seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32);
+  const round = (n) => Math.round(n * 10) / 10;
 
   const offices = {};
   const times = [];
-  for (const o of officeIndex.offices) {
+  for (const o of officeList) {
     const code = o.aliases.find((a) => /^[A-Z]{3,4}$/.test(a)) ?? normalize(o.name).replace(/ /g, '-').toUpperCase();
     offices[code] = { name: o.name, type: o.type, city: o.city, state: o.state, lat: o.lat, lng: o.lng };
     for (const f of forms) {
@@ -281,7 +223,7 @@ function buildSample(officeIndex) {
         const months = round(Math.max(0.5, f.base * (0.45 + rand() * 1.3)));
         times.push({
           form: f.form, subtype: st.code, office: code, months, lowMonths: null,
-          display: `${months} months`, publicationDate: null, receiptDate: null,
+          display: `${months} months`, raw: [], publicationDate: null, receiptDate: null,
         });
       }
     }
@@ -291,15 +233,17 @@ function buildSample(officeIndex) {
 
 // ---------- main ----------
 
-const officeIndex = await loadOfficeIndex();
+const officeList = JSON.parse(await readFile(OFFICES_FILE, 'utf8'));
+if (RAW_DIR) await mkdir(RAW_DIR, { recursive: true });
+
 let result;
 if (SAMPLE) {
-  result = buildSample(officeIndex);
+  result = buildSample(officeList);
 } else {
   try {
-    result = await fetchLive(officeIndex);
+    result = await fetchLive(buildOfficeMatcher(officeList));
   } catch (err) {
-    console.error(`Fetch failed: ${err.message}`);
+    console.error(`\nFetch failed: ${err.message}`);
     console.error('Existing data file left unchanged.');
     process.exit(1);
   }
@@ -309,17 +253,20 @@ if (SAMPLE) {
   }
 }
 
+const publicationDates = result.times.map((t) => t.publicationDate).filter(Boolean).sort();
+
 // Keep the old file (and its timestamp) when nothing changed, so the scheduled
 // workflow only commits real updates.
 const previous = await readFile(OUT_FILE, 'utf8').then(JSON.parse).catch(() => null);
-const fingerprint = (d) => JSON.stringify([d.sample ?? SAMPLE, d.forms, d.offices, d.times]);
-if (previous && fingerprint(previous) === fingerprint({ ...result, sample: SAMPLE })) {
+const fingerprint = (d) => JSON.stringify([d.forms, d.offices, d.times]);
+if (previous && fingerprint(previous) === fingerprint(result)) {
   console.log('\nNo changes since the last fetch.');
   process.exit(0);
 }
 
 const doc = {
   generatedAt: new Date().toISOString(),
+  publishedAt: publicationDates.at(-1) ?? null,
   source: 'https://egov.uscis.gov/processing-times',
   sample: SAMPLE,
   ...result,

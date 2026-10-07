@@ -23,34 +23,66 @@ saves the results to `data/processing-times.json`, which the static page loads.
 | --- | --- |
 | `index.html`, `styles.css`, `app.js` | The website (no build step; Leaflet loaded from a CDN) |
 | `data/offices.json` | Office names and their coordinates, used to place them on the map |
-| `data/processing-times.json` | The generated dataset |
+| `data/processing-times.json` | Live dataset (created by the first successful fetch) |
+| `data/sample-processing-times.json` | Made-up data for previewing the layout (`?sample`) |
 | `scripts/fetch-processing-times.mjs` | Fetcher (Node 18+, no dependencies) |
-| `.github/workflows/update-data.yml` | Daily job that runs the fetcher and commits changes |
+| `scripts/lib/uscis.mjs` | Strict parsing of USCIS responses |
+| `scripts/validate-data.mjs` | Checks run before data is published |
+| `test/` | Parser tests, run against saved API responses |
+| `.github/workflows/update-data.yml` | Daily job: test, fetch, archive raw responses, validate, commit |
 
 ## Running locally
 
 ```bash
 npm start          # serves the site at http://localhost:8080
 npm run fetch      # pull live data from USCIS (takes a few minutes)
-npm run sample     # write labelled sample data (no network needed)
+npm run validate   # check data/processing-times.json before publishing
+npm test           # parser tests
+npm run sample     # regenerate the made-up sample data
 node scripts/fetch-processing-times.mjs --forms I-485,N-400   # fetch only some forms
 ```
 
-The repo currently ships with **sample data** so the site works out of the box. The page
-shows a yellow banner until real data has been fetched.
+Until real data has been fetched, the site says "No USCIS data yet". To preview the
+layout, open it with `?sample` (e.g. `http://localhost:8080/?sample`).
 
-## Deploying
+## Making sure the numbers are real
 
-1. Push to GitHub and enable **Settings → Pages → Deploy from branch** (root of the default branch).
-2. Under **Actions**, run **Update processing times** once by hand. After that it runs daily
-   and only commits when USCIS has published new numbers.
+Every number on the site should trace back to a USCIS response. These checks enforce that:
 
-If the fetcher reports offices without coordinates, add them to `data/offices.json`
-(`name` must match the USCIS office name, or list it under `aliases`).
+1. **Sample data is kept separate.** Made-up numbers live only in
+   `data/sample-processing-times.json` and load only with `?sample`, which shows a
+   "Sample data" banner. The validator rejects any file marked as sample data, so it can't be
+   published as the real dataset.
+2. **The parser fails instead of guessing.** Unknown time units, missing values, or a
+   response without the requested category are errors, not defaults
+   (`scripts/lib/uscis.mjs`). If more than 10% of lookups fail, the fetch aborts and the
+   previous data stays up.
+3. **Validation runs before every publish** (`scripts/validate-data.mjs`). It checks that
+   values are plausible (0–120 months), every entry references a real form, category and
+   office, there are no duplicates, and USCIS's publication date isn't stale. It also
+   compares against the previous release: if more than 30% of times move by more than
+   50% at once, that looks like a parsing bug, not a USCIS update, and the publish is blocked.
+4. **Raw responses are archived.** Each scheduled run uploads every USCIS response it used
+   as a workflow artifact (kept 90 days). Each published entry also keeps USCIS's exact
+   values (`raw`), and the site shows them next to the rounded number.
+5. **Provenance is shown on the page.** The footer shows USCIS's publication date, a banner
+   warns if it's more than 60 days old, and each office panel links to USCIS to check.
+
+### First-run checklist
+
+The USCIS API is undocumented, and the test fixtures in `test/fixtures/api` are
+hand-written in the expected format. The first time live data is fetched:
+
+1. Run the **Update processing times** workflow, or `npm run fetch -- --raw-dir raw` locally.
+2. Pick 5–10 entries across different forms and office types, look each one up on
+   <https://egov.uscis.gov/processing-times>, and confirm the numbers match.
+3. Replace the fixtures with real responses (see `test/fixtures/README.md`) so the tests
+   cover the real format from then on.
 
 ## Caveats
 
-- The USCIS API is undocumented and may change shape or block automated traffic. The
-  fetcher parses it defensively and leaves the existing data file unchanged if a run fails.
+- The USCIS API is undocumented and may change format or block automated traffic. When
+  that happens the workflow fails (GitHub emails you) and the site keeps the last good data,
+  with a staleness banner once it's more than 60 days old.
 - USCIS times describe how long it took to complete 80% of cases. They aren't a
   guarantee for any individual case, and this site isn't legal advice.

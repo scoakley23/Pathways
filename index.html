@@ -32,10 +32,7 @@
     </div>
   </header>
 
-  <div id="sample-banner" class="banner" hidden>
-    Showing <strong>sample data</strong>, not real USCIS numbers. Run
-    <code>npm run fetch</code> (or the “Update processing times” GitHub Action) to load live data.
-  </div>
+  <div id="banner" class="banner" role="status" hidden></div>
 
   <main class="layout">
     <section class="map-wrap" aria-label="Map of USCIS offices">
@@ -58,8 +55,7 @@
   </main>
 
   <footer class="footer">
-    <span id="updated"></span>
-    · Source: <a href="https://egov.uscis.gov/processing-times" target="_blank" rel="noopener">USCIS Check Case Processing Times</a>.
+    <span id="updated"></span>Source: <a href="https://egov.uscis.gov/processing-times" target="_blank" rel="noopener">USCIS Check Case Processing Times</a>.
     Times show how long USCIS took to complete 80% of cases; yours may differ. Not legal advice.
   </footer>
 
