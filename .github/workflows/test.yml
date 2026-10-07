@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -16,7 +18,9 @@ jobs:
       - name: Validate published data
         run: |
           if [ -f data/processing-times.json ]; then
-            node scripts/validate-data.mjs data/processing-times.json --max-age-days 365
+            # Compare with the previous commit's data to catch parser bugs.
+            git show HEAD~1:data/processing-times.json > previous.json 2>/dev/null || echo '{"sample":true,"times":[]}' > previous.json
+            node scripts/validate-data.mjs data/processing-times.json --previous previous.json --max-age-days 365
           else
             echo "No live data committed yet."
           fi

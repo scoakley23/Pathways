@@ -1,16 +1,10 @@
 name: Update processing times
 
+# USCIS's Cloudflare bot check blocks GitHub's servers, so data is normally
+# fetched on a person's computer with `npm run fetch` and committed (see
+# README). This workflow is kept for manual runs in case that changes.
 on:
-  schedule:
-    # USCIS refreshes its published times roughly monthly; check daily.
-    - cron: '17 9 * * *'
   workflow_dispatch:
-  # Also refresh whenever the fetcher or office list changes.
-  push:
-    paths:
-      - 'scripts/**'
-      - 'data/offices.json'
-      - '.github/workflows/update-data.yml'
 
 permissions:
   contents: write

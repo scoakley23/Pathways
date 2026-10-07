@@ -11,7 +11,7 @@ the data published at <https://egov.uscis.gov/processing-times>.
 ## How it works
 
 ```
-USCIS API ──(GitHub Action, daily)──▶ data/processing-times.json ──▶ static site (Leaflet map)
+USCIS API ──(npm run fetch, on your computer)──▶ data/processing-times.json ──(git push)──▶ static site
 ```
 
 The USCIS site is backed by an undocumented JSON API (`/processing-times/api/...`). It
@@ -29,17 +29,36 @@ saves the results to `data/processing-times.json`, which the static page loads.
 | `scripts/lib/uscis.mjs` | Strict parsing of USCIS responses |
 | `scripts/validate-data.mjs` | Checks run before data is published |
 | `test/` | Parser tests, run against saved API responses |
-| `.github/workflows/update-data.yml` | Daily job: test, fetch, archive raw responses, validate, commit |
+| `.github/workflows/test.yml` | On every push: tests, then validates any committed data |
+| `.github/workflows/update-data.yml` | Manual-only cloud fetch (currently blocked by USCIS, see below) |
 
-## Running locally
+## Updating the data
+
+USCIS protects its site with a Cloudflare bot check that blocks requests from cloud
+servers, including GitHub's, so the data is fetched on your own computer:
+
+```bash
+npm install                 # once; uses your installed Google Chrome
+npm run fetch               # opens a browser window and downloads every form/office (several minutes)
+npm run validate            # optional; the Test workflow also runs this when you push
+git add data/processing-times.json
+git commit -m "Update USCIS processing times"
+git push                    # tests and validation run on GitHub, then Pages redeploys
+```
+
+If USCIS shows a "Just a moment..." or "verify you are human" check in the window,
+complete it yourself; the script waits up to five minutes and then continues. It never
+tries to get around the check. If you don't have Google Chrome, run
+`npx playwright install chromium` once. USCIS updates its numbers roughly monthly, so
+fetching once a month is enough. The site shows a warning once the data is over 60 days old.
+
+## Running the site locally
 
 ```bash
 npm start          # serves the site at http://localhost:8080
-npm run fetch      # pull live data from USCIS (takes a few minutes)
-npm run validate   # check data/processing-times.json before publishing
 npm test           # parser tests
 npm run sample     # regenerate the made-up sample data
-node scripts/fetch-processing-times.mjs --forms I-485,N-400   # fetch only some forms
+node scripts/fetch-processing-times.mjs --headed --forms I-485,N-400   # fetch only some forms
 ```
 
 Until real data has been fetched, the site says "No USCIS data yet". To preview the
@@ -57,37 +76,31 @@ Every number on the site should trace back to a USCIS response. These checks enf
    response without the requested category are errors, not defaults
    (`scripts/lib/uscis.mjs`). If more than 10% of lookups fail, the fetch aborts and the
    previous data stays up.
-3. **Validation runs before every publish** (`scripts/validate-data.mjs`). It checks that
+3. **Validation runs on every push** (`scripts/validate-data.mjs`, via the Test workflow). It checks that
    values are plausible (0–120 months), every entry references a real form, category and
    office, there are no duplicates, and USCIS's publication date isn't stale. It also
    compares against the previous release: if more than 30% of times move by more than
    50% at once, that looks like a parsing bug, not a USCIS update, and the publish is blocked.
-4. **Raw responses are archived.** Each scheduled run uploads every USCIS response it used
-   as a workflow artifact (kept 90 days). Each published entry also keeps USCIS's exact
-   values (`raw`), and the site shows them next to the rounded number.
+4. **Raw responses are kept.** `npm run fetch` saves every USCIS response it used to `raw/`
+   (not committed). Each published entry also keeps USCIS's exact values (`raw`), and the
+   site shows them next to the rounded number.
 5. **Provenance is shown on the page.** The footer shows USCIS's publication date, a banner
    warns if it's more than 60 days old, and each office panel links to USCIS to check.
 
 ### First-run checklist
 
 The USCIS API is undocumented, and the test fixtures in `test/fixtures/api` are
-hand-written in the expected format. The first time live data is fetched:
+hand-written in the expected format. After the first `npm run fetch`:
 
-1. Run the **Update processing times** workflow, or `npm run fetch -- --raw-dir raw` locally.
-2. Pick 5–10 entries across different forms and office types, look each one up on
+1. Pick 5–10 entries across different forms and office types, look each one up on
    <https://egov.uscis.gov/processing-times>, and confirm the numbers match.
-3. Replace the fixtures with real responses (see `test/fixtures/README.md`) so the tests
-   cover the real format from then on.
+2. Replace the fixtures with real responses from `raw/` (see `test/fixtures/README.md`) so
+   the tests cover the real format from then on.
 
 ## Caveats
 
-- USCIS's bot protection blocks plain scripted requests from cloud servers (HTTP 403). The
-  workflow therefore fetches through headless Chrome (`--browser`, using Playwright), and the
-  fetcher switches to that mode automatically after a 403. If GitHub's servers are blocked
-  even then, run `npm install --no-save playwright && npx playwright install chromium`, then
-  `npm run fetch` on your own computer and commit `data/processing-times.json`.
-- The USCIS API is undocumented and may change format or block automated traffic. When
-  that happens the workflow fails (GitHub emails you) and the site keeps the last good data,
-  with a staleness banner once it's more than 60 days old.
+- The USCIS API is undocumented and may change format. If it does, the strict parser makes
+  `npm run fetch` fail instead of writing bad data, and the site keeps the last good data
+  (with a staleness banner once it's more than 60 days old).
 - USCIS times describe how long it took to complete 80% of cases. They aren't a
   guarantee for any individual case, and this site isn't legal advice.

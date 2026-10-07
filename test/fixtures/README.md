@@ -6,11 +6,11 @@
 
 The current files are **hand-written** in the format the fetcher expects. They
 haven't been checked against real USCIS output yet. To test against real
-responses, run a small live fetch and copy what it saved:
+responses, copy in what a live fetch saved:
 
 ```bash
-node scripts/fetch-processing-times.mjs --forms I-485,N-400 --raw-dir /tmp/uscis-raw --out /tmp/check.json
-rm test/fixtures/api/*.json && cp /tmp/uscis-raw/*.json test/fixtures/api/
+npm run fetch          # saves every response to raw/
+rm test/fixtures/api/*.json && cp raw/*.json test/fixtures/api/
 ```
 
 Then update the expected values in `test/fetch.test.mjs` to match what USCIS

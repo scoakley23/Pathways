@@ -6,12 +6,15 @@
   "type": "module",
   "scripts": {
     "start": "npx --yes http-server -c-1 -p 8080 .",
-    "fetch": "node scripts/fetch-processing-times.mjs",
+    "fetch": "node scripts/fetch-processing-times.mjs --headed --raw-dir raw",
     "validate": "node scripts/validate-data.mjs",
     "sample": "node scripts/fetch-processing-times.mjs --sample",
     "test": "node --test"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
   }
 }

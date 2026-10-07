@@ -10,14 +10,17 @@
 //   node scripts/fetch-processing-times.mjs --forms I-485,N-400   # only some forms
 //   node scripts/fetch-processing-times.mjs --sample         # fake data, written to a separate file
 //   node scripts/fetch-processing-times.mjs --out file.json  # write somewhere else
-//   node scripts/fetch-processing-times.mjs --browser        # request through headless Chrome
+//   node scripts/fetch-processing-times.mjs --browser        # request through a headless browser
+//   node scripts/fetch-processing-times.mjs --headed         # visible browser (what `npm run fetch` uses)
 //
-// USCIS sits behind bot protection that often answers plain scripted requests
-// (especially from cloud servers) with HTTP 403. With --browser, or
-// automatically after a 403, the fetcher opens the USCIS page in headless
-// Chrome via Playwright and makes the same API calls from inside the page, the
-// way the USCIS site itself does. Playwright is only needed for that mode:
-//   npm install --no-save playwright && npx playwright install chromium
+// USCIS sits behind Cloudflare bot protection that answers plain scripted
+// requests with HTTP 403 and may show a "Just a moment..." check. In browser
+// mode the fetcher opens the USCIS page via Playwright and makes the API calls
+// from inside it, the way the USCIS site itself does. With --headed, if
+// USCIS shows its check, the person running the script completes it in the
+// window; the script never tries to get around it.
+// Browser mode needs Playwright (`npm install`) and Google Chrome or
+// `npx playwright install chromium`.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +42,7 @@ const HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
 };
-const CONCURRENCY = 4;
+const CONCURRENCY = 2;
 const RETRIES = 3;
 // Abort without writing if more than this share of office lookups fail.
 const MAX_FAILURE_RATE = 0.1;
@@ -51,7 +54,8 @@ const argValue = (name) => {
   return a.includes('=') ? a.split('=').slice(1).join('=') : args[args.indexOf(a) + 1];
 };
 const SAMPLE = args.includes('--sample');
-const BROWSER = args.includes('--browser');
+const HEADED = args.includes('--headed');
+const BROWSER = args.includes('--browser') || HEADED;
 const RAW_DIR = argValue('--raw-dir') && path.resolve(argValue('--raw-dir'));
 const ONLY_FORMS = argValue('--forms')?.split(',').map((s) => s.trim().toUpperCase()) ?? null;
 const OUT_FILE = argValue('--out') ? path.resolve(argValue('--out')) : SAMPLE ? SAMPLE_FILE : LIVE_FILE;
@@ -64,46 +68,59 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let browserPage = null;
 let browser = null;
 
+const CHECK_TITLE = /just a moment|attention required|verify you are human/i;
+
 async function openBrowser() {
   let playwright;
   try {
     playwright = await import('playwright');
   } catch {
-    throw new Error('browser mode needs Playwright: npm install --no-save playwright && npx playwright install chromium');
+    throw new Error('browser mode needs Playwright: run `npm install` (and `npx playwright install chromium` if Google Chrome isn\'t installed)');
   }
-  // Prefer an installed Google Chrome (preinstalled on GitHub's runners), then
-  // Playwright's own Chromium. Both run Chrome's full headless mode, which
-  // behaves like a normal browser.
+  // Prefer an installed Google Chrome, then Playwright's own Chromium.
   const channels = process.env.USCIS_BROWSER_CHANNEL ? [process.env.USCIS_BROWSER_CHANNEL] : ['chrome', 'chromium'];
   for (const channel of channels) {
     try {
-      browser = await playwright.chromium.launch({ channel });
-      console.log(`Using browser channel "${channel}" (${browser.version()})`);
+      browser = await playwright.chromium.launch({ channel, headless: !HEADED });
+      console.log(`Using ${HEADED ? 'a visible' : 'a headless'} browser (${channel} ${browser.version()})`);
       break;
     } catch (err) {
       console.warn(`Couldn't launch browser channel "${channel}": ${err.message.split('\n')[0]}`);
     }
   }
-  if (!browser) throw new Error('no usable browser; run: npx playwright install chromium');
-  const probe = await browser.newPage();
-  const userAgent = (await probe.evaluate(() => navigator.userAgent)).replace('HeadlessChrome', 'Chrome');
-  await probe.close();
-  const context = await browser.newContext({ userAgent, locale: 'en-US', timezoneId: 'America/New_York' });
+  if (!browser) throw new Error('no usable browser; install Google Chrome or run `npx playwright install chromium`');
+  const context = await browser.newContext({ locale: 'en-US' });
   browserPage = await context.newPage();
-  // Don't wait for "network idle": pages with analytics may never get there.
-  // Wait for the HTML, then give the site's own scripts (including any bot
-  // check that sets cookies) a few seconds to run.
-  const started = Date.now();
+
   let res;
   try {
     res = await browserPage.goto(PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   } catch (err) {
-    throw new Error(`USCIS page didn't respond within 60s in the browser (${err.message.split('\n')[0]}); this network is probably being blocked`);
+    throw new Error(`USCIS page didn't respond within 60s (${err.message.split('\n')[0]})`);
   }
-  await browserPage.waitForTimeout(5_000);
-  const title = await browserPage.title().catch(() => '');
-  console.log(`Opened ${PAGE_URL} in headless Chrome: HTTP ${res?.status() ?? '?'} in ${Date.now() - started} ms, title ${JSON.stringify(title)}`);
-  if (res && res.status() >= 400) throw new Error(`USCIS page returned HTTP ${res.status()} in the browser too`);
+  await browserPage.waitForTimeout(2_000);
+  let title = await browserPage.title().catch(() => '');
+  console.log(`Opened ${PAGE_URL}: HTTP ${res?.status() ?? '?'}, title ${JSON.stringify(title)}`);
+
+  // USCIS uses a Cloudflare "Just a moment..." check. It's there to keep
+  // automated traffic out, so we don't try to get around it: in a visible
+  // browser the person running the script completes it, like any visitor.
+  if (CHECK_TITLE.test(title) || (res && res.status() >= 400)) {
+    if (!HEADED) {
+      throw new Error(
+        `USCIS showed a bot check ("${title}", HTTP ${res?.status()}). ` +
+          'Run the fetch on your own computer with a visible browser instead: npm run fetch'
+      );
+    }
+    console.log('\nUSCIS is showing a security check. Complete it in the browser window; waiting up to 5 minutes…');
+    const deadline = Date.now() + 5 * 60_000;
+    while (CHECK_TITLE.test(title) && Date.now() < deadline) {
+      await browserPage.waitForTimeout(2_000);
+      title = await browserPage.title().catch(() => title); // the page may be navigating
+    }
+    if (CHECK_TITLE.test(title)) throw new Error('the USCIS security check was not completed');
+    console.log('Check passed; continuing.\n');
+  }
 }
 
 async function closeBrowser() {
