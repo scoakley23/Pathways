@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pathways · USCIS Processing Map</title>
+  <meta name="description" content="Interactive map of USCIS case processing times by office." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Pathways</h1>
+      <p>USCIS processing times, mapped</p>
+    </div>
+    <div class="controls">
+      <label>Form
+        <select id="form-select"></select>
+      </label>
+      <label>Category
+        <select id="subtype-select"></select>
+      </label>
+      <label>Office type
+        <select id="type-select">
+          <option value="all">All offices</option>
+          <option value="field">Field offices</option>
+          <option value="service">Service centers</option>
+          <option value="asylum">Asylum offices</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <div id="sample-banner" class="banner" hidden>
+    Showing <strong>sample data</strong>, not real USCIS numbers. Run
+    <code>npm run fetch</code> (or the “Update processing times” GitHub Action) to load live data.
+  </div>
+
+  <main class="layout">
+    <section class="map-wrap" aria-label="Map of USCIS offices">
+      <div id="map"></div>
+      <div class="legend" id="legend" aria-label="Legend"></div>
+    </section>
+
+    <aside class="panel">
+      <section id="summary" class="card"></section>
+      <section id="detail" class="card" hidden></section>
+      <section class="card">
+        <div class="list-head">
+          <h2>Offices</h2>
+          <input id="search" type="search" placeholder="Filter by city or state" aria-label="Filter offices" />
+        </div>
+        <ol id="office-list" class="office-list"></ol>
+        <p id="unmapped-note" class="muted small" hidden></p>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    <span id="updated"></span>
+    · Source: <a href="https://egov.uscis.gov/processing-times" target="_blank" rel="noopener">USCIS Check Case Processing Times</a>.
+    Times show how long USCIS took to complete 80% of cases; yours may differ. Not legal advice.
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

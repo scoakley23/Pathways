@@ -1,0 +1,40 @@
+name: Update processing times
+
+on:
+  schedule:
+    # USCIS refreshes its published times roughly monthly; check daily.
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch latest USCIS processing times
+        run: node scripts/fetch-processing-times.mjs
+
+      - name: Commit updated data
+        run: |
+          if git diff --quiet -- data/processing-times.json; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/processing-times.json
+          git commit -m "Update USCIS processing times"
+          git push

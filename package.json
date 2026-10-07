@@ -1,0 +1,15 @@
+{
+  "name": "pathways",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Interactive map of USCIS processing times by office",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes http-server -c-1 -p 8080 .",
+    "fetch": "node scripts/fetch-processing-times.mjs",
+    "sample": "node scripts/fetch-processing-times.mjs --sample"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
