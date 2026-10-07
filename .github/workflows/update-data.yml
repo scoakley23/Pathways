@@ -5,9 +5,16 @@ on:
     # USCIS refreshes its published times roughly monthly; check daily.
     - cron: '17 9 * * *'
   workflow_dispatch:
+  # Also refresh whenever the fetcher or office list changes.
+  push:
+    paths:
+      - 'scripts/**'
+      - 'data/offices.json'
+      - '.github/workflows/update-data.yml'
 
 permissions:
   contents: write
+  pages: write
 
 concurrency:
   group: update-data
@@ -57,3 +64,13 @@ jobs:
           git add data/processing-times.json
           git commit -m "Update USCIS processing times (run ${{ github.run_id }})"
           git push
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        id: commit
+
+      # Pushes made with GITHUB_TOKEN may not trigger a Pages rebuild by themselves.
+      - name: Rebuild GitHub Pages
+        if: steps.commit.outputs.published == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"

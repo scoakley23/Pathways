@@ -207,6 +207,12 @@ select, input[type="search"] {
   background: var(--surface);
 }
 
+/* Soften the basemap so the office markers stand out; darken it in dark mode. */
+.leaflet-tile-pane { filter: saturate(0.35) brightness(1.03); }
+@media (prefers-color-scheme: dark) {
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(0.3) brightness(0.85); }
+}
+
 /* Leaflet popups follow the theme. */
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
 .leaflet-container { font: inherit; }

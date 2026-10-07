@@ -319,14 +319,38 @@ function applyHash(h) {
   state.office = h.office && data.offices[h.office] ? h.office : null;
 }
 
+// Keyless tile providers, tried in order. If the first tiles of one fail to
+// load (e.g. a provider starts requiring an API key), switch to the next.
+const BASEMAPS = [
+  {
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    options: { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' },
+  },
+  {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    options: { maxZoom: 16, attribution: 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors' },
+  },
+];
+
+function addBasemap(i) {
+  const provider = BASEMAPS[i];
+  if (!provider) return;
+  const layer = L.tileLayer(provider.url, provider.options);
+  let loaded = 0;
+  let failed = 0;
+  layer.on('tileload', () => loaded++);
+  layer.on('tileerror', () => {
+    if (++failed >= 4 && loaded === 0) {
+      map.removeLayer(layer);
+      addBasemap(i + 1);
+    }
+  });
+  layer.addTo(map);
+}
+
 function initMap() {
   map = L.map('map', { zoomSnap: 0.5, worldCopyJump: true }).setView([38.5, -96], 4);
-  const style = DARK ? 'dark_all' : 'light_all';
-  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`, {
-    maxZoom: 18,
-    subdomains: 'abcd',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-  }).addTo(map);
+  addBasemap(0);
   markerLayer = L.layerGroup().addTo(map);
   map.on('click', () => {
     if (state.office) {
