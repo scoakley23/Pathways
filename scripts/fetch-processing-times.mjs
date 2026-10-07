@@ -90,8 +90,19 @@ async function openBrowser() {
   await probe.close();
   const context = await browser.newContext({ userAgent, locale: 'en-US', timezoneId: 'America/New_York' });
   browserPage = await context.newPage();
-  const res = await browserPage.goto(PAGE_URL, { waitUntil: 'networkidle', timeout: 90_000 });
-  console.log(`Opened ${PAGE_URL} in headless Chrome (HTTP ${res?.status() ?? '?'})`);
+  // Don't wait for "network idle": pages with analytics may never get there.
+  // Wait for the HTML, then give the site's own scripts (including any bot
+  // check that sets cookies) a few seconds to run.
+  const started = Date.now();
+  let res;
+  try {
+    res = await browserPage.goto(PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  } catch (err) {
+    throw new Error(`USCIS page didn't respond within 60s in the browser (${err.message.split('\n')[0]}); this network is probably being blocked`);
+  }
+  await browserPage.waitForTimeout(5_000);
+  const title = await browserPage.title().catch(() => '');
+  console.log(`Opened ${PAGE_URL} in headless Chrome: HTTP ${res?.status() ?? '?'} in ${Date.now() - started} ms, title ${JSON.stringify(title)}`);
   if (res && res.status() >= 400) throw new Error(`USCIS page returned HTTP ${res.status()} in the browser too`);
 }
 
@@ -119,7 +130,9 @@ async function getJson(urlPath) {
     try {
       const { status, text } = await request(url);
       if (status === 404) return null;
-      if (status === 403) throw new BlockedError(`HTTP 403 for ${url} (blocked by USCIS bot protection)`);
+      if (status === 403) {
+        throw new BlockedError(`HTTP 403 for ${url} (blocked by USCIS bot protection): ${text.replace(/\s+/g, ' ').slice(0, 160)}`);
+      }
       if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       let json;
       try {
