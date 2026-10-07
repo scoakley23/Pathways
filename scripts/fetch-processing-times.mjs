@@ -10,6 +10,14 @@
 //   node scripts/fetch-processing-times.mjs --forms I-485,N-400   # only some forms
 //   node scripts/fetch-processing-times.mjs --sample         # fake data, written to a separate file
 //   node scripts/fetch-processing-times.mjs --out file.json  # write somewhere else
+//   node scripts/fetch-processing-times.mjs --browser        # request through headless Chrome
+//
+// USCIS sits behind bot protection that often answers plain scripted requests
+// (especially from cloud servers) with HTTP 403. With --browser, or
+// automatically after a 403, the fetcher opens the USCIS page in headless
+// Chrome via Playwright and makes the same API calls from inside the page, the
+// way the USCIS site itself does. Playwright is only needed for that mode:
+//   npm install --no-save playwright && npx playwright install chromium
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -22,10 +30,12 @@ const LIVE_FILE = path.join(ROOT, 'data', 'processing-times.json');
 const SAMPLE_FILE = path.join(ROOT, 'data', 'sample-processing-times.json');
 const OFFICES_FILE = path.join(ROOT, 'data', 'offices.json');
 
-const API = 'https://egov.uscis.gov/processing-times/api';
+const ORIGIN = process.env.USCIS_ORIGIN ?? 'https://egov.uscis.gov';
+const PAGE_URL = `${ORIGIN}/processing-times/`;
+const API = `${ORIGIN}/processing-times/api`;
 const HEADERS = {
   Accept: 'application/json, text/plain, */*',
-  Referer: 'https://egov.uscis.gov/processing-times/',
+  Referer: PAGE_URL,
   'User-Agent':
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
 };
@@ -41,6 +51,7 @@ const argValue = (name) => {
   return a.includes('=') ? a.split('=').slice(1).join('=') : args[args.indexOf(a) + 1];
 };
 const SAMPLE = args.includes('--sample');
+const BROWSER = args.includes('--browser');
 const RAW_DIR = argValue('--raw-dir') && path.resolve(argValue('--raw-dir'));
 const ONLY_FORMS = argValue('--forms')?.split(',').map((s) => s.trim().toUpperCase()) ?? null;
 const OUT_FILE = argValue('--out') ? path.resolve(argValue('--out')) : SAMPLE ? SAMPLE_FILE : LIVE_FILE;
@@ -49,15 +60,56 @@ const OUT_FILE = argValue('--out') ? path.resolve(argValue('--out')) : SAMPLE ? 
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Set when requests go through a real browser page (see --browser above).
+let browserPage = null;
+let browser = null;
+
+async function openBrowser() {
+  let playwright;
+  try {
+    playwright = await import('playwright');
+  } catch {
+    throw new Error('browser mode needs Playwright: npm install --no-save playwright && npx playwright install chromium');
+  }
+  // The "chromium" channel runs Chrome's full headless mode, which behaves
+  // like a normal browser.
+  browser = await playwright.chromium.launch({ channel: 'chromium' });
+  const probe = await browser.newPage();
+  const userAgent = (await probe.evaluate(() => navigator.userAgent)).replace('HeadlessChrome', 'Chrome');
+  await probe.close();
+  const context = await browser.newContext({ userAgent, locale: 'en-US', timezoneId: 'America/New_York' });
+  browserPage = await context.newPage();
+  const res = await browserPage.goto(PAGE_URL, { waitUntil: 'networkidle', timeout: 90_000 });
+  console.log(`Opened ${PAGE_URL} in headless Chrome (HTTP ${res?.status() ?? '?'})`);
+  if (res && res.status() >= 400) throw new Error(`USCIS page returned HTTP ${res.status()} in the browser too`);
+}
+
+async function closeBrowser() {
+  await browser?.close();
+}
+
+async function request(url) {
+  if (browserPage) {
+    return browserPage.evaluate(async (u) => {
+      const res = await fetch(u, { headers: { Accept: 'application/json, text/plain, */*' }, credentials: 'include' });
+      return { status: res.status, text: await res.text() };
+    }, url);
+  }
+  const res = await fetch(url, { headers: HEADERS });
+  return { status: res.status, text: await res.text() };
+}
+
+class BlockedError extends Error {}
+
 async function getJson(urlPath) {
   const url = `${API}/${urlPath.split('/').map(encodeURIComponent).join('/')}`;
   let lastErr;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
     try {
-      const res = await fetch(url, { headers: HEADERS });
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-      const text = await res.text();
+      const { status, text } = await request(url);
+      if (status === 404) return null;
+      if (status === 403) throw new BlockedError(`HTTP 403 for ${url} (blocked by USCIS bot protection)`);
+      if (status < 200 || status >= 300) throw new Error(`HTTP ${status} for ${url}`);
       let json;
       try {
         json = JSON.parse(text);
@@ -70,7 +122,8 @@ async function getJson(urlPath) {
       return json;
     } catch (err) {
       lastErr = err;
-      if (err instanceof ParseError) break;
+      // Bad data won't improve on retry, and a block is handled by switching to the browser.
+      if (err instanceof ParseError || (err instanceof BlockedError && !browserPage)) break;
       await sleep(500 * 2 ** attempt);
     }
   }
@@ -240,13 +293,24 @@ let result;
 if (SAMPLE) {
   result = buildSample(officeList);
 } else {
+  const matchOffice = buildOfficeMatcher(officeList);
   try {
-    result = await fetchLive(buildOfficeMatcher(officeList));
+    if (BROWSER) await openBrowser();
+    try {
+      result = await fetchLive(matchOffice);
+    } catch (err) {
+      if (!(err instanceof BlockedError) || browserPage) throw err;
+      console.warn(`\n${err.message}\nRetrying through headless Chrome…`);
+      await openBrowser();
+      result = await fetchLive(matchOffice);
+    }
   } catch (err) {
     console.error(`\nFetch failed: ${err.message}`);
     console.error('Existing data file left unchanged.');
+    await closeBrowser();
     process.exit(1);
   }
+  await closeBrowser();
   if (!result.times.length) {
     console.error('USCIS returned no processing times; existing data file left unchanged.');
     process.exit(1);

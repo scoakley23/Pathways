@@ -81,6 +81,11 @@ hand-written in the expected format. The first time live data is fetched:
 
 ## Caveats
 
+- USCIS's bot protection blocks plain scripted requests from cloud servers (HTTP 403). The
+  workflow therefore fetches through headless Chrome (`--browser`, using Playwright), and the
+  fetcher switches to that mode automatically after a 403. If GitHub's servers are blocked
+  even then, run `npm install --no-save playwright && npx playwright install chromium`, then
+  `npm run fetch` on your own computer and commit `data/processing-times.json`.
 - The USCIS API is undocumented and may change format or block automated traffic. When
   that happens the workflow fails (GitHub emails you) and the site keeps the last good data,
   with a staleness banner once it's more than 60 days old.
