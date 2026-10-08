@@ -1,4 +1,0 @@
-# Netlify hosts the Pathways USA website from the website/ folder (no build step).
-[build]
-  publish = "website"
-  command = ""
