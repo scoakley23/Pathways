@@ -1,5 +1,7 @@
 # Pathways: USCIS processing times, mapped
 
+> The Pathways USA pre-launch website (app sign-ups) lives in [`website/`](website/README.md).
+
 An interactive map of how long USCIS takes to process forms at each office, built from
 the data published at <https://egov.uscis.gov/processing-times>.
 
