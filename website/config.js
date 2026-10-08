@@ -3,16 +3,17 @@
 window.PATHWAYS_CONFIG = {
   // Where sign-ups are sent: "google" (Google Form, free, responses land in a
   // Google Sheet), "formspree" (formspree.io), or "" while not set up yet.
-  signupProvider: "",
+  signupProvider: "google",
 
   // For "google": the ID from your form's link, docs.google.com/forms/d/e/<ID>/viewform,
   // and the entry.NNNN name of each question (README explains how to find them).
-  googleFormId: "",
+  googleFormId: "1FAIpQLSfoGI4H_sVFmqQnJYyE0GYZKLYvOepG9i-3aP4XvAFc9ANBSg",
   googleFields: {
-    name: "",     // e.g. "entry.1234567890"
-    email: "",
-    role: "",
-    platform: "",
+    name: "entry.1023181715",
+    email: "entry.660938223",
+    role: "entry.783137285",      // "I am…"
+    platform: "entry.2110278569", // "Phone type"
+    questions: "entry.357668315", // "Any questions?"
   },
 
   // For "formspree": the form endpoint, e.g. "https://formspree.io/f/abcdwxyz".

@@ -187,11 +187,12 @@ p { margin: 0 0 1em; }
 .field { display: grid; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .field label, .field legend { font-weight: 800; color: var(--navy); font-size: .95rem; padding: 0; }
 .opt { color: var(--muted); font-weight: 600; }
-input[type="text"], input[type="email"], select {
+input[type="text"], input[type="email"], select, textarea {
   font: inherit; width: 100%; padding: 12px 14px; border-radius: 12px;
   border: 2px solid var(--line); background: #fbfcfe; color: var(--text);
 }
-input:focus, select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px rgba(78,130,204,.18); }
+textarea { resize: vertical; min-height: 84px; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px rgba(78,130,204,.18); }
 input[aria-invalid="true"] { border-color: var(--red); }
 .radios { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
 .radios label { display: flex; align-items: center; gap: 8px; border: 2px solid var(--line); border-radius: 999px; padding: 7px 16px; cursor: pointer; font-weight: 700; color: var(--text); }

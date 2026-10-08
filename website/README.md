@@ -20,15 +20,17 @@ Preview locally: `cd website && python3 -m http.server 8000`, then open <http://
 
 Sign-ups go into a Google Sheet you own. No account limits, nothing to pay for.
 
-1. Create a new form at <https://forms.google.com> with four **Short answer** questions,
-   in this order: `Name`, `Email`, `Role`, `Phone`. Don't require sign-in
+1. Create a new form at <https://forms.google.com> with these questions, none required:
+   `Name`, `Email`, `I am…`, `Phone type` (all **Short answer**) and `Any questions?`
+   (**Paragraph**). Don't require sign-in
    (Settings → Responses → "Restrict to users in your organization" off, "Collect email
    addresses" off).
 2. In the **Responses** tab, click **Link to Sheets** so sign-ups land in a spreadsheet.
-3. Click **⋮ → Get pre-filled link**, type `NAME`, `EMAIL`, `ROLE`, `PHONE` into the four
-   answers, click **Get link**, then **Copy link**. It looks like:
+3. Click **⋮ → Get pre-filled link**, type a word into **every** answer box (an empty box
+   is left out of the link), click **Get link**, then **Copy link** in the bar at the bottom
+   left. It looks like:
    ```
-   https://docs.google.com/forms/d/e/1FAIpQLSd.../viewform?usp=pp_url&entry.111=NAME&entry.222=EMAIL&entry.333=ROLE&entry.444=PHONE
+   https://docs.google.com/forms/d/e/1FAIpQLSd.../viewform?usp=pp_url&entry.111=NAME&entry.222=EMAIL&...
    ```
 4. Fill in `config.js` from that link:
    ```js
@@ -39,6 +41,7 @@ Sign-ups go into a Google Sheet you own. No account limits, nothing to pay for.
      email: "entry.222",
      role: "entry.333",
      platform: "entry.444",
+     questions: "entry.555",
    },
    ```
 5. Open the site, sign up with your own email, and check that a row appears in the Sheet.

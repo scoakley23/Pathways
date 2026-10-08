@@ -47,7 +47,7 @@
       const fields = config.googleFields || {};
       if (!config.googleFormId || !fields.email) throw new Error("Google Form is not fully configured.");
       const body = new URLSearchParams();
-      for (const key of ["name", "email", "role", "platform"]) {
+      for (const key of ["name", "email", "role", "platform", "questions"]) {
         if (fields[key]) body.append(fields[key], data[key] || "");
       }
       // Google Forms doesn't allow reading the response cross-origin, so a
@@ -103,6 +103,7 @@
       email: String(fd.get("email") || "").trim(),
       role: String(fd.get("role") || ""),
       platform: String(fd.get("platform") || ""),
+      questions: String(fd.get("questions") || "").trim(),
     };
     if (!EMAIL_RE.test(data.email)) {
       emailInput.setAttribute("aria-invalid", "true");
